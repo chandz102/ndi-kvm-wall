@@ -8,6 +8,9 @@ final class NDIDiscoveryManager {
     private var discoveryTask: Task<Void, Never>?
 
     func start() {
+        // onAppear can fire more than once; a second start() used to orphan
+        // the first task (and its NDI finder) running forever.
+        guard discoveryTask == nil else { return }
         discoveryTask = Task.detached(priority: .utility) { [weak self] in
             var createSettings = NDIlib_find_create_t()
             createSettings.show_local_sources = true

@@ -37,14 +37,30 @@ enum KeySymMapping {
         111: 0xffc9,  // F12
     ]
 
+    /// Modifiers forwarded as their own keysym press/release (native
+    /// transport only). Only Control for now: Shift is already folded into
+    /// the character sent, and Option/Command are left to the character
+    /// mapping so Option-composed characters (e.g. '{' on Nordic layouts)
+    /// keep working.
+    static let forwardedModifiers: [(NSEvent.ModifierFlags, Int32)] = [
+        (.control, 0xffe3),  // Control_L
+    ]
+
     /// Returns the X11 keysym for this key event, or nil if unmapped.
     static func keySym(for event: NSEvent) -> Int32? {
         if let special = specialKeyCodes[event.keyCode] {
             return special
         }
+        // With Control held, `characters` is an ASCII control code (Ctrl+C
+        // -> 0x03), which falls outside the Latin-1 range below and was
+        // silently dropped. Control is forwarded as its own keysym, so send
+        // the plain key underneath it.
+        let chars = event.modifierFlags.contains(.control)
+            ? event.charactersIgnoringModifiers
+            : event.characters
         // Printable characters: X11 keysyms for Latin-1 (0x20-0xFF) equal
         // the Unicode code point directly.
-        guard let scalar = event.characters?.unicodeScalars.first else { return nil }
+        guard let scalar = chars?.unicodeScalars.first else { return nil }
         let value = scalar.value
         guard value >= 0x20, value <= 0xFF else { return nil }
         return Int32(value)

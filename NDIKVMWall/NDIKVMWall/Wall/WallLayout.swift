@@ -78,21 +78,25 @@ final class WallLayout {
 
     func assign(source: NDISource, to slot: WallSlot) {
         slot.assign(source)
+        pendingRestore?[slot.id]?.sourceName = nil
         saveAssignments()
     }
 
     func clear(slot: WallSlot) {
         slot.clear()
+        pendingRestore?[slot.id] = nil
         saveAssignments()
     }
 
     func assignControl(source: NDISource, to slot: WallSlot) {
         slot.assignControl(source)
+        pendingRestore?[slot.id]?.controlSourceName = nil
         saveAssignments()
     }
 
     func clearControl(slot: WallSlot) {
         slot.clearControl()
+        pendingRestore?[slot.id]?.controlSourceName = nil
         saveAssignments()
     }
 
@@ -110,35 +114,57 @@ final class WallLayout {
     // MARK: - Persistence
 
     func saveAssignments() {
+        // Saved-but-not-yet-discovered sources are kept, so an unrelated
+        // save doesn't wipe assignments whose source hasn't appeared yet.
         let states = slots.map {
-            SlotState(id: $0.id, sourceName: $0.source?.name, customName: $0.customName,
-                      controlSourceName: $0.controlSource?.name)
+            SlotState(id: $0.id,
+                      sourceName: $0.source?.name ?? pendingRestore?[$0.id]?.sourceName,
+                      customName: $0.customName,
+                      controlSourceName: $0.controlSource?.name ?? pendingRestore?[$0.id]?.controlSourceName)
         }
         if let data = try? JSONEncoder().encode(states) {
             UserDefaults.standard.set(data, forKey: "wallAssignments_v1")
         }
     }
 
-    private var hasRestoredAssignments = false
+    /// Saved assignments whose NDI source hasn't been discovered yet, keyed
+    /// by slot id. nil until the saved state has been loaded. NDI discovery
+    /// reports sources incrementally, so restoring only against the first
+    /// non-empty list silently dropped every slot whose source showed up a
+    /// moment later (and the next save then erased them for good).
+    private var pendingRestore: [Int: SlotState]?
 
     func restoreAssignmentsIfNeeded(from sources: [NDISource]) {
-        guard !hasRestoredAssignments, !sources.isEmpty else { return }
-        hasRestoredAssignments = true
+        guard !sources.isEmpty else { return }
 
-        guard let data   = UserDefaults.standard.data(forKey: "wallAssignments_v1"),
-              let states = try? JSONDecoder().decode([SlotState].self, from: data) else { return }
+        if pendingRestore == nil {
+            pendingRestore = [:]
+            guard let data   = UserDefaults.standard.data(forKey: "wallAssignments_v1"),
+                  let states = try? JSONDecoder().decode([SlotState].self, from: data) else { return }
+            for state in states {
+                guard let slot = slots.first(where: { $0.id == state.id }) else { continue }
+                slot.customName = state.customName
+                pendingRestore?[state.id] = state
+            }
+        }
 
-        for state in states {
-            guard let slot = slots.first(where: { $0.id == state.id }) else { continue }
-            slot.customName = state.customName
+        guard let pending = pendingRestore, !pending.isEmpty else { return }
+        for (id, var state) in pending {
+            guard let slot = slots.first(where: { $0.id == id }) else {
+                pendingRestore?[id] = nil
+                continue
+            }
             if let name = state.sourceName,
                let source = sources.first(where: { $0.name == name }) {
                 slot.assign(source)
+                state.sourceName = nil
             }
             if let controlName = state.controlSourceName,
                let controlSource = sources.first(where: { $0.name == controlName }) {
                 slot.assignControl(controlSource)
+                state.controlSourceName = nil
             }
+            pendingRestore?[id] = (state.sourceName == nil && state.controlSourceName == nil) ? nil : state
         }
     }
 }

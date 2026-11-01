@@ -48,6 +48,7 @@ final class KVMHelperEngine {
                 pixels[i] = 20; pixels[i + 1] = 20; pixels[i + 2] = 20; pixels[i + 3] = 255
             }
             var lastFrameSent = Date.distantPast
+            var lastConnections: Int32 = 0
 
             while !Task.isCancelled {
                 if Date().timeIntervalSince(lastFrameSent) > 1.0 {
@@ -72,8 +73,14 @@ final class KVMHelperEngine {
                 }
 
                 let connections = NDIlib_send_get_no_connections(sender, 0)
-                await MainActor.run { self?.connectionCount = Int(connections) }
+                let lostAllControllers = lastConnections > 0 && connections == 0
+                lastConnections = connections
+                await MainActor.run {
+                    if lostAllControllers { KVMEventInjector.releaseAll() }
+                    self?.connectionCount = Int(connections)
+                }
             }
+            await MainActor.run { KVMEventInjector.releaseAll() }
 
             await MainActor.run { self?.isRunning = false }
         }
