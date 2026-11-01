@@ -6,7 +6,21 @@ import CoreGraphics
 @MainActor
 enum KVMEventInjector {
     private static var heldButton: CGMouseButton?
+    private static var heldKeys: Set<UInt16> = []
     private static var lastPosition: CGPoint = .zero
+    private static var scrollRemainder: (dx: Float, dy: Float) = (0, 0)
+
+    /// Releases anything the controller left pressed. Called when the last
+    /// controller disconnects: its keyUp/mouseUp will never arrive, and an
+    /// injected key/button would otherwise stay down on this Mac.
+    static func releaseAll() {
+        for code in heldKeys { postKey(keyCode: code, flags: 0, down: false) }
+        heldKeys = []
+        if let held = heldButton {
+            postMouseButton(held, down: false, at: lastPosition)
+            heldButton = nil
+        }
+    }
 
     static func handle(_ message: String) {
         guard let event = KVMProtocol.parse(message) else { return }
@@ -24,8 +38,10 @@ enum KVMEventInjector {
         case .scroll(let dx, let dy):
             postScroll(dx: dx, dy: dy)
         case .keyDown(let code, let flags):
+            heldKeys.insert(code)
             postKey(keyCode: code, flags: flags, down: true)
         case .keyUp(let code, let flags):
+            heldKeys.remove(code)
             postKey(keyCode: code, flags: flags, down: false)
         }
     }
@@ -44,7 +60,8 @@ enum KVMEventInjector {
 
     private static func movePointer(x: Float, y: Float) {
         let size = screenSize()
-        let point = CGPoint(x: CGFloat(x) * size.width, y: CGFloat(y) * size.height)
+        let nx = CGFloat(min(max(x, 0), 1)), ny = CGFloat(min(max(y, 0), 1))
+        let point = CGPoint(x: nx * size.width, y: ny * size.height)
         lastPosition = point
         let type: CGEventType
         let button: CGMouseButton
@@ -79,8 +96,17 @@ enum KVMEventInjector {
     }
 
     private static func postScroll(dx: Float, dy: Float) {
+        // Trackpad deltas arrive as fractions (the controller divides by 10);
+        // Int32(_:) truncated nearly all of them to 0, so smooth scrolling
+        // did nothing. Carry the fractional part over to the next event.
+        // Clamp first: Int32(_:) traps on out-of-range values from the wire.
+        let ty = scrollRemainder.dy + min(max(dy, -10_000), 10_000)
+        let tx = scrollRemainder.dx + min(max(dx, -10_000), 10_000)
+        let iy = ty.rounded(.towardZero), ix = tx.rounded(.towardZero)
+        scrollRemainder = (dx: tx - ix, dy: ty - iy)
+        guard iy != 0 || ix != 0 else { return }
         let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel,
-                             wheelCount: 2, wheel1: Int32(dy), wheel2: Int32(dx), wheel3: 0)
+                             wheelCount: 2, wheel1: Int32(iy), wheel2: Int32(ix), wheel3: 0)
         event?.post(tap: .cghidEventTap)
     }
 

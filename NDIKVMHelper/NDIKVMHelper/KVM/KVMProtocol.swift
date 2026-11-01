@@ -32,11 +32,11 @@ enum KVMProtocol {
             guard let dx = attrFloat(s, "dx"), let dy = attrFloat(s, "dy") else { return nil }
             return .scroll(dx: dx, dy: dy)
         case "kd":
-            guard let c = attrUInt(s, "c"), let m = attrUInt64(s, "m") else { return nil }
-            return .keyDown(code: UInt16(c), flags: m)
+            guard let c = attrUInt16(s, "c"), let m = attrUInt64(s, "m") else { return nil }
+            return .keyDown(code: c, flags: m)
         case "ku":
-            guard let c = attrUInt(s, "c"), let m = attrUInt64(s, "m") else { return nil }
-            return .keyUp(code: UInt16(c), flags: m)
+            guard let c = attrUInt16(s, "c"), let m = attrUInt64(s, "m") else { return nil }
+            return .keyUp(code: c, flags: m)
         default:
             return nil
         }
@@ -48,7 +48,12 @@ enum KVMProtocol {
         guard let end = after.firstIndex(of: "\"") else { return nil }
         return String(after[..<end])
     }
-    private static func attrFloat(_ s: String, _ name: String) -> Float? { attr(s, name).flatMap { Float($0) } }
-    private static func attrUInt(_ s: String, _ name: String) -> UInt? { attr(s, name).flatMap { UInt($0) } }
+    // Input arrives from the network: reject non-finite floats ("nan",
+    // "inf") and out-of-range key codes here rather than trapping later in
+    // a numeric conversion (UInt16(_:) / Int32(_:) crash on overflow/NaN).
+    private static func attrFloat(_ s: String, _ name: String) -> Float? {
+        attr(s, name).flatMap { Float($0) }.flatMap { $0.isFinite ? $0 : nil }
+    }
+    private static func attrUInt16(_ s: String, _ name: String) -> UInt16? { attr(s, name).flatMap { UInt16($0) } }
     private static func attrUInt64(_ s: String, _ name: String) -> UInt64? { attr(s, name).flatMap { UInt64($0) } }
 }
